@@ -61,7 +61,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 INDEX = "lol_pro_matches"
-MAX_ATTEMPTS = 3  # Give up enriching a game after this many failures
+MAX_ATTEMPTS = 10  # Give up enriching a game after this many failures
 
 
 def _extract_date(start_time: str) -> str:
@@ -155,7 +155,7 @@ class EnrichmentPipeline:
 
         Returns the number of games processed (attempted, not necessarily enriched).
         """
-        docs = query_unenriched(INDEX, size=self.batch_size)
+        docs = query_unenriched(INDEX, size=self.batch_size, max_attempts=MAX_ATTEMPTS)
 
         if not docs:
             logger.info("No unenriched games found.")

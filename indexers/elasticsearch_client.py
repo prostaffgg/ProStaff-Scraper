@@ -65,16 +65,21 @@ def update_document(index: str, doc_id: str, fields: Dict) -> None:
     es.update(index=index, id=doc_id, doc=fields)
 
 
-def query_unenriched(index: str, size: int = 50) -> List[Dict]:
-    """Return documents where riot_enriched is false, ordered by start_time asc.
+def query_unenriched(index: str, size: int = 50, max_attempts: int = 10) -> List[Dict]:
+    """Return unenriched documents that still have attempts remaining, newest first.
 
     Each returned item is a dict with '_id' and '_source' keys.
     """
     es = get_client()
     query = {
-        "query": {"term": {"riot_enriched": False}},
+        "query": {
+            "bool": {
+                "must": {"term": {"riot_enriched": False}},
+                "filter": {"range": {"enrichment_attempts": {"lt": max_attempts}}},
+            }
+        },
         "size": size,
-        "sort": [{"start_time": {"order": "asc", "unmapped_type": "date"}}],
+        "sort": [{"start_time": {"order": "desc", "unmapped_type": "date"}}],
     }
     result = es.search(index=index, **query)
     return [
