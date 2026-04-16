@@ -411,6 +411,14 @@ def trigger_historical_backfill(
         le=2030,
         description="Ignore tournaments before this year",
     ),
+    reset: bool = Query(
+        False,
+        description=(
+            "Delete the existing progress file and rediscover all tournaments "
+            "from scratch. Use this when the cached tournament list is stale "
+            "(e.g. backfill was previously run with wrong min_year)."
+        ),
+    ),
     api_key: str = Security(_require_api_key),
 ):
     """
@@ -424,11 +432,23 @@ def trigger_historical_backfill(
     restarts mid-run, re-calling this endpoint will continue from where
     it left off, skipping already-completed tournaments.
 
+    Pass `reset=true` to wipe the progress file and restart discovery from
+    scratch (useful when the cached tournament list is wrong or stale).
+
     Each game takes ~24 seconds (2 Leaguepedia requests at 12s each).
     A full CBLOL history (~30 tournaments × ~60 games) takes roughly 6 hours.
 
     Check progress with `GET /api/v1/historical-backfill/status?league=CBLOL`.
     """
+    import os as _os
+
+    progress_file = f"data/backfill_{league.upper()}.json"
+    reset_done = False
+    if reset and _os.path.exists(progress_file):
+        _os.remove(progress_file)
+        reset_done = True
+        logger.info(f"historical-backfill: reset progress file '{progress_file}'")
+
     def _run():
         pipeline = HistoricalBackfillPipeline(league=league, min_year=min_year)
         pipeline.run()
@@ -439,8 +459,9 @@ def trigger_historical_backfill(
         "message": f"Historical backfill started for '{league}' (min_year={min_year})",
         "league": league,
         "min_year": min_year,
+        "reset": reset_done,
         "status": "running",
-        "progress_file": f"data/backfill_{league.upper()}.json",
+        "progress_file": progress_file,
         "note": (
             "Runs in background. Each game ~24s (Leaguepedia rate limit). "
             f"Check GET /api/v1/historical-backfill/status?league={league} for progress."

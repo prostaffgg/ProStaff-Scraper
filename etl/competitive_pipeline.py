@@ -218,16 +218,21 @@ class CompetitivePipeline:
 
         event_games = event.get('games', [])
 
+        # t1_wins + t2_wins = exact number of games played in the series.
+        # Games beyond this index were never played (series ended earlier).
+        # Using win counts is more reliable than VOD presence: recent matches
+        # often have no VODs yet even though they are completed.
+        games_played = t1_wins + t2_wins
+
         for idx, game in enumerate(event_games, start=1):
+            if idx > games_played:
+                break  # series ended before this game slot
+
             game_id = game.get('id')
             if not game_id:
                 continue
 
             vods = game.get('vods', [])
-
-            # A game with no VODs was not played (series ended before this game)
-            if not vods:
-                continue
 
             # Deduplicate
             doc_id = f"{match_id}_{idx}"
