@@ -81,6 +81,9 @@ services:
       - ELASTICSEARCH_URL=${ELASTICSEARCH_URL}
       - DEFAULT_PLATFORM_REGION=${DEFAULT_PLATFORM_REGION:-BR1}
       - PYTHONUNBUFFERED=1
+    # No HTTP server in this service — disable inherited Dockerfile healthcheck
+    healthcheck:
+      disable: true
     command:
       - "python"
       - "etl/enrichment_pipeline.py"
@@ -116,6 +119,9 @@ services:
       - SYNC_INTERVAL_HOURS=${SYNC_INTERVAL_HOURS:-1}
       # Match limit per league per run
       - SYNC_LIMIT=${SYNC_LIMIT:-100}
+    # No HTTP server in this service — disable inherited Dockerfile healthcheck
+    healthcheck:
+      disable: true
     command:
       - "python"
       - "etl/competitive_pipeline.py"
