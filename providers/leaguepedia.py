@@ -259,14 +259,15 @@ def get_game_players(page_name: str, game_duration_seconds: int = 0) -> List[Dic
 
     Returns:
         List of player dicts with champion, KDA, items, runes, summoner spells, role,
-        and optional extended stats (damage_taken, vision_score, wards_placed,
-        wards_killed) when available from Leaguepedia.
+        side, vision_score, pentakills, trinket, keystone_rune, primary_tree,
+        secondary_tree, and player_win flag.
         Empty list if not found.
 
-    Note on optional fields:
-        DamageTaken, VisionScore, WardsPlaced and WardsKilled are included in the
-        Cargo query but may be absent from older tournament records.  Missing values
-        are stored as 0 rather than None so downstream code can do arithmetic safely.
+    Note on removed fields:
+        DamageTaken, WardsPlaced and WardsKilled were removed from the Leaguepedia
+        ScoreboardPlayers schema. They are kept in the output dict as 0 for backward
+        compatibility with existing Elasticsearch documents and downstream consumers.
+        VisionScore remains available and is still queried.
     """
     page_name_escaped = page_name.replace("'", "\\'")
 
@@ -274,10 +275,10 @@ def get_game_players(page_name: str, game_duration_seconds: int = 0) -> List[Dic
         data = _cargo_query({
             "tables": "ScoreboardPlayers",
             "fields": (
-                "GameId,Name,Team,Champion,Role,"
+                "GameId,Name,Team,Champion,Role,Side,PlayerWin,"
                 "Kills,Deaths,Assists,Gold,CS,DamageToChampions,"
-                "DamageTaken,VisionScore,WardsPlaced,WardsKilled,"
-                "Items,Runes,SummonerSpells"
+                "VisionScore,Pentakills,"
+                "Items,Trinket,Runes,KeystoneRune,PrimaryTree,SecondaryTree,SummonerSpells"
             ),
             "where": f"GameId='{page_name_escaped}'",
             "limit": "10",
@@ -308,20 +309,27 @@ def get_game_players(page_name: str, game_duration_seconds: int = 0) -> List[Dic
             "team_name":       row.get("Team", ""),
             "champion_name":   row.get("Champion", ""),
             "role":            row.get("Role", ""),
+            "side":            _safe_int(row.get("Side")),  # 1=Blue, 2=Red
+            "player_win":      row.get("PlayerWin", ""),
             "kills":           _safe_int(row.get("Kills")),
             "deaths":          _safe_int(row.get("Deaths")),
             "assists":         _safe_int(row.get("Assists")),
             "gold":            gold,
             "cs":              cs,
             "damage":          damage,
-            # Extended stats — present when Leaguepedia exposes them
-            "damage_taken":    _safe_int(row.get("DamageTaken")),
+            # Extended stats available in current Leaguepedia schema
             "vision_score":    _safe_int(row.get("VisionScore")),
-            "wards_placed":    _safe_int(row.get("WardsPlaced")),
-            "wards_killed":    _safe_int(row.get("WardsKilled")),
+            "pentakills":      _safe_int(row.get("Pentakills")),
+            # Fields removed from Leaguepedia schema — kept as 0 for backward compat
+            "damage_taken":    0,
+            "wards_placed":    0,
+            "wards_killed":    0,
             "items":           _parse_items(row.get("Items", "")),
+            "trinket":         row.get("Trinket", ""),
             "summoner_spells": _parse_summoner_spells(row.get("SummonerSpells", "")),
-            "keystone":        rune_data["keystone"],
+            "keystone":        row.get("KeystoneRune", "") or rune_data["keystone"],
+            "primary_tree":    row.get("PrimaryTree", ""),
+            "secondary_tree":  row.get("SecondaryTree", ""),
             "primary_runes":   rune_data["primary_runes"],
             "secondary_runes": rune_data["secondary_runes"],
             "stat_shards":     rune_data["stat_shards"],
