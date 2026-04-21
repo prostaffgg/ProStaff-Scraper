@@ -92,9 +92,9 @@ services:
       - "${SYNC_LIMIT:-100}"
     restart: unless-stopped
 
-  # Historical backfill — runs once and exits when all tournaments are done.
-  # Restarts automatically on crash (resumable via data/backfill_CBLOL.json).
-  # To start:  docker compose up backfill -d
+  # Historical backfill daemon — processes all leagues in sequence, sleeps
+  # BACKFILL_CHECK_INTERVAL hours, then re-runs to pick up new splits.
+  # Already-completed tournaments are skipped via per-league JSON progress files.
   # To watch:  docker compose logs backfill -f
   # To status: docker compose exec api python etl/historical_backfill.py --league CBLOL --status
   backfill:
@@ -110,18 +110,13 @@ services:
       elasticsearch:
         condition: service_healthy
     command:
-      - "python"
-      - "etl/historical_backfill.py"
-      - "--league"
-      - "${BACKFILL_LEAGUE:-CBLOL}"
-      - "--min-year"
-      - "${BACKFILL_MIN_YEAR:-2013}"
-    restart: on-failure
+      - "sh"
+      - "-c"
+      - "python etl/historical_backfill.py --daemon --leagues ${BACKFILL_LEAGUES:-CBLOL} --min-year ${BACKFILL_MIN_YEAR:-2013} --check-interval ${BACKFILL_CHECK_INTERVAL:-6}"
+    restart: unless-stopped
     # Disable the Dockerfile healthcheck (no HTTP server in this service)
     healthcheck:
       disable: true
-    profiles:
-      - backfill
 
 volumes:
   es_data:

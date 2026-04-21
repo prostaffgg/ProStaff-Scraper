@@ -22,6 +22,8 @@ Usage:
     python etl/historical_backfill.py --league CBLOL --dry-run
     python etl/historical_backfill.py --league CBLOL --status
     python etl/historical_backfill.py --league CBLOL --min-year 2022
+    python etl/historical_backfill.py --leagues CBLOL LCS LCK --daemon
+    python etl/historical_backfill.py --leagues CBLOL LCS --daemon --check-interval 6
 """
 
 import os
@@ -496,6 +498,74 @@ class HistoricalBackfillPipeline:
 # CLI
 # ---------------------------------------------------------------------------
 
+def _resolve_leagues(args: argparse.Namespace) -> List[str]:
+    """
+    Return the list of leagues to process.
+
+    --leagues takes precedence over --league for forward compatibility.
+    Falls back to --league (or its default) when --leagues is not supplied.
+    """
+    if args.leagues:
+        return [l.upper() for l in args.leagues]
+    return [args.league.upper()]
+
+
+def _run_league(league: str, args: argparse.Namespace) -> None:
+    """Run the full backfill (or status/reset) for a single league."""
+    pipeline = HistoricalBackfillPipeline(
+        league=league,
+        dry_run=args.dry_run,
+        min_year=args.min_year,
+    )
+
+    if args.status:
+        status = pipeline.get_status()
+        print(json.dumps(status, indent=2, ensure_ascii=False))
+        return
+
+    if args.reset:
+        path = _progress_path(league)
+        if os.path.exists(path):
+            os.remove(path)
+            logger.info(f"[BACKFILL] Deleted progress file: {path}")
+        else:
+            logger.info(f"[BACKFILL] No progress file found at: {path}")
+
+    pipeline.run()
+
+
+def _run_daemon(leagues: List[str], args: argparse.Namespace) -> None:
+    """
+    Process all leagues sequentially in an infinite loop.
+
+    After each full cycle, sleep check_interval hours before restarting.
+    Tournaments already completed are skipped automatically via the
+    per-league JSON progress files; only new splits are processed.
+    """
+    check_interval_seconds = args.check_interval * 3600
+    cycle = 0
+
+    while True:
+        cycle += 1
+        logger.info(f"[BACKFILL] Daemon cycle {cycle} — processing {len(leagues)} league(s): {leagues}")
+
+        for league in leagues:
+            logger.info(f"[BACKFILL] Starting backfill for league: {league}")
+            pipeline = HistoricalBackfillPipeline(
+                league=league,
+                dry_run=args.dry_run,
+                min_year=args.min_year,
+            )
+            pipeline.run()
+            logger.info(f"[BACKFILL] Finished backfill for league: {league}")
+
+        logger.info(
+            f"[BACKFILL] All leagues processed. "
+            f"Sleeping {args.check_interval} hours before next check."
+        )
+        time.sleep(check_interval_seconds)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Historical backfill: import all editions of a league from Leaguepedia"
@@ -503,7 +573,14 @@ def main():
     parser.add_argument(
         "--league",
         default="CBLOL",
-        help="League prefix on Leaguepedia OverviewPage (e.g. CBLOL, LCS)",
+        help="Single league prefix (e.g. CBLOL, LCS). Superseded by --leagues when both are given.",
+    )
+    parser.add_argument(
+        "--leagues",
+        nargs="+",
+        default=[],
+        help="One or more league prefixes to process in sequence (e.g. --leagues CBLOL LCS LCK). "
+             "Takes precedence over --league.",
     )
     parser.add_argument(
         "--min-year",
@@ -519,35 +596,34 @@ def main():
     parser.add_argument(
         "--status",
         action="store_true",
-        help="Print current progress for this league and exit",
+        help="Print current progress for the resolved league(s) and exit",
     )
     parser.add_argument(
         "--reset",
         action="store_true",
-        help="Delete progress file and start from scratch",
+        help="Delete progress file(s) and start from scratch",
+    )
+    parser.add_argument(
+        "--daemon",
+        action="store_true",
+        help="Run continuously: process all leagues, sleep check-interval hours, repeat",
+    )
+    parser.add_argument(
+        "--check-interval",
+        type=int,
+        default=6,
+        dest="check_interval",
+        help="Hours to sleep between daemon cycles (default: 6)",
     )
     args = parser.parse_args()
 
-    pipeline = HistoricalBackfillPipeline(
-        league=args.league,
-        dry_run=args.dry_run,
-        min_year=args.min_year,
-    )
+    leagues = _resolve_leagues(args)
 
-    if args.status:
-        status = pipeline.get_status()
-        print(json.dumps(status, indent=2, ensure_ascii=False))
-        return
-
-    if args.reset:
-        path = _progress_path(args.league)
-        if os.path.exists(path):
-            os.remove(path)
-            print(f"Deleted progress file: {path}")
-        else:
-            print(f"No progress file found at: {path}")
-
-    pipeline.run()
+    if args.daemon:
+        _run_daemon(leagues, args)
+    else:
+        for league in leagues:
+            _run_league(league, args)
 
 
 if __name__ == "__main__":
