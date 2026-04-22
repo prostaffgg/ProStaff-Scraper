@@ -16,6 +16,7 @@ from etl.competitive_pipeline import CompetitivePipeline
 from etl.enrichment_pipeline import EnrichmentPipeline
 from etl.leaguepedia_pipeline import LeaguepediaPipeline
 from etl.historical_backfill import HistoricalBackfillPipeline
+from api.routes.admin import router as admin_router
 
 load_dotenv()
 
@@ -37,6 +38,8 @@ app = FastAPI(
     description="API for serving League of Legends professional match data",
     version="1.0.0"
 )
+
+app.include_router(admin_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -253,10 +256,10 @@ def trigger_enrichment(
     - **batch**: How many games to attempt in this run (1-50)
     """
     try:
-        pending = query_unenriched(INDEX, size=1)
-        pending_count_check = len(pending)
+        _pending = query_unenriched(INDEX, size=1)
+        _ = len(_pending)
     except Exception:
-        pending_count_check = -1
+        pass
 
     def _run_enrichment():
         pipeline = EnrichmentPipeline(is_production=production, batch_size=batch)
