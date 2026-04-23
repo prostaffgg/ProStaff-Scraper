@@ -20,7 +20,9 @@ def get_client() -> Elasticsearch:
     parsed = urlparse(url)
 
     if parsed.username and parsed.password:
-        clean_url = f"{parsed.scheme}://{parsed.hostname}:{parsed.port}"
+        host = parsed.hostname
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        clean_url = f"{parsed.scheme}://{host}:{port}"
         return Elasticsearch(
             clean_url,
             basic_auth=(parsed.username, parsed.password),

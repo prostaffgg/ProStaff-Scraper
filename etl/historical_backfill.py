@@ -71,8 +71,9 @@ logger = logging.getLogger(__name__)
 #
 # Format: { canonical_name: [alias1, alias2, ...] }
 LEAGUE_ALIASES: Dict[str, List[str]] = {
-    "CBLOL": ["LTA South"],   # 2025 rebrand — Leaguepedia uses "LTA South" (not "LTA Sul")
-    "LCS": ["LTA North"],     # 2025 rebrand — Leaguepedia uses "LTA North" (not "LTA Norte")
+    "CBLOL": ["LTA South"],             # 2025 rebrand
+    "LCS": ["LTA North"],               # 2025 rebrand
+    "CBLOL Academy": ["LTA South Academy"],  # academy tracks follow the same rebrand
 }
 
 # ---------------------------------------------------------------------------
@@ -81,6 +82,9 @@ LEAGUE_ALIASES: Dict[str, List[str]] = {
 
 # Leaguepedia has qualification/academy/all-star pages under the same prefix.
 # These keywords in the OverviewPage indicate non-main-event pages to skip.
+# NOTE: "Academy" was removed — CBLOL Academy and CD Academy are synced as
+# dedicated leagues (league="CBLOL Academy", league="Circuito Desafiante"),
+# not as a side-effect of the CBLOL run.
 _SKIP_KEYWORDS = [
     "Qualifier",
     "qualifier",
@@ -89,7 +93,6 @@ _SKIP_KEYWORDS = [
     "Tiebreaker",
     "Promotion",
     "Relegation",
-    "Academy",
     "Showmatch",
     "Chrono",
     "Boost",

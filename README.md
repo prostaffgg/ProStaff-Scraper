@@ -28,22 +28,25 @@
 ## Features
 
 - **FastAPI REST API** — serve professional match data via HTTP endpoints
-- **Two-phase pipeline** — sync (LoL Esports) + background enrichment (Leaguepedia)
+- **Two-phase live pipeline** — sync (LoL Esports) + background enrichment (Leaguepedia)
 - **Full player stats** — champion, KDA, gold, CS, items (names), runes (names), summoner spells
 - **Leaguepedia integration** — only public source for competitive game data (Riot Match-V5 does not expose tournament server games)
 - **Enrichment daemon** — background job processes pending games every 30 minutes, respects rate limits
 - **Deduplication** — `riot_enriched` flag prevents re-processing; `enrichment_attempts` counter abandons after 3 failures
-- **Multi-league** — CBLOL, LCS, LEC, LCK, LPL, and more
+- **Historical backfill** — imports ALL editions of a league from Leaguepedia (CBLOL since 2013, resumable)
+- **Oracle's Elixir ingest** — bulk-indexes OE CSV exports (97K+ games, all major leagues); idempotent (`op_type=create`)
+- **Oracle's Elixir backfill** — fills missing stats (damage_taken, wards) on Leaguepedia docs using OE CSV as join source
+- **Multi-league** — CBLOL, CBLOL Academy, Circuito Desafiante, LCS, LEC, LCK, LPL, and more
 - **Production ready** — Docker Compose with Traefik/SSL for Coolify deployment
 
 ---
 
 ## Architecture
 
-The system runs in two independent phases:
+The system has four independent pipelines that all write to the same ES index (`lol_pro_matches`):
 
 ```
-Phase 1 — Sync (scraper-cron, every 1h)
+Phase 1 — Live Sync (scraper-cron, every 1h)
   LoL Esports API
     └─ getCompletedEvents → series with games + YouTube VOD IDs
          └─ competitive_pipeline.py
@@ -55,12 +58,28 @@ Phase 2 — Enrichment (enrichment-daemon, every 30min)
          1. ScoreboardGames  → page_name, winner, patch, gamelength
          2. ScoreboardPlayers → 10 players with champion/KDA/items/runes
          └─ update_document(ES, riot_enriched: true, participants: [...])
+
+Phase 3 — Historical Backfill (one-off / daily cron via Rails Sidekiq)
+  Leaguepedia Tournaments table → all OverviewPages for a league
+    └─ historical_backfill.py (resumable — persists progress to JSON)
+         └─ For each tournament not yet completed:
+              └─ leaguepedia_pipeline.py → bulk_index → ES
+
+Phase 4 — Oracle's Elixir Ingest (one-off / manual re-run)
+  OE CSV files (annual download, 97K+ games, all major leagues)
+    └─ oracles_elixir_ingest.py
+         └─ op_type='create' → ES (idempotent, skips duplicates)
+         └─ oracles_elixir_backfill.py → fills damage_taken/wards on existing docs
 ```
 
 Why Leaguepedia instead of Riot Match-V5: competitive games run on Riot's internal
 tournament servers and **do not appear in the public Match-V5 API**. Leaguepedia
 receives official data from Riot's esports disclosure program and is the only
 public source for these stats.
+
+Why Oracle's Elixir: broader league coverage and additional stat columns
+(damage_taken, wards_placed, wards_killed) not always available via Leaguepedia.
+OE CSVs are a login-gated annual download — re-run ingest when a new year's CSV is available.
 
 For the full architecture diagram and detailed flow, see [`docs/Arquitetura.md`](./docs/Arquitetura.md).
 
@@ -187,7 +206,7 @@ curl -X DELETE https://your-elasticsearch-host:9200/lol_pro_matches
 | Data validation | Pydantic 2.9 |
 | Storage | Elasticsearch 8.x |
 | Deployment | Docker Compose + Traefik (Coolify) |
-| Data sources | LoL Esports Persisted Gateway, Leaguepedia Cargo API |
+| Data sources | LoL Esports Persisted Gateway, Leaguepedia Cargo API, Oracle's Elixir CSV |
 
 ---
 
@@ -204,8 +223,13 @@ ProStaff-Scraper/
 │   ├── riot.py                      # Riot Account/Match V5 client
 │   └── riot_rate_limited.py         # Riot client with rate limit tiers
 ├── etl/
-│   ├── competitive_pipeline.py      # Phase 1: sync from LoL Esports
-│   └── enrichment_pipeline.py       # Phase 2: enrich from Leaguepedia (daemon)
+│   ├── competitive_pipeline.py      # Phase 1: live sync from LoL Esports
+│   ├── enrichment_pipeline.py       # Phase 2: enrich from Leaguepedia (daemon)
+│   ├── historical_backfill.py       # Phase 3: full league history from Leaguepedia
+│   ├── leaguepedia_pipeline.py      # Leaguepedia game + player indexer (used by phases 2 & 3)
+│   ├── oracles_elixir_ingest.py     # Phase 4: bulk ingest from Oracle's Elixir CSVs
+│   ├── oracles_elixir_backfill.py   # Phase 4b: fill missing stats using OE CSV join
+│   └── historical_data_migration.py # One-off migration helper (legacy)
 ├── indexers/
 │   ├── elasticsearch_client.py      # ES helpers (bulk, update, query_unenriched)
 │   └── mappings.py                  # Index mappings (participant fields are strings)
@@ -216,7 +240,7 @@ ProStaff-Scraper/
 ├── Dockerfile.production            # Production Docker image
 ├── DEPLOYMENT.md                    # Coolify deployment guide
 ├── QUICKSTART.md                    # 5-minute setup guide
-├── requirements.txt                 # Python dependencies
+├── requirements.txt                 # Python dependencies (elasticsearch==8.13.1)
 └── .env.example                     # Environment variables template
 ```
 
@@ -253,6 +277,13 @@ See `.env.example` for the full template.
 
 > Note: `RIOT_API_KEY` is only used by the sync pipeline to call LoL Esports endpoints.
 > The enrichment daemon uses Leaguepedia anonymously — no API key required.
+
+> **ETL scripts** (`oracles_elixir_ingest.py`, `historical_backfill.py`) must be run with the project's
+> `.venv` (Python 3.11, `elasticsearch==8.13.1`). The system-wide `elasticsearch` package may be v9
+> and is incompatible with an ES 8.x server. Create the venv once:
+> ```bash
+> python3.11 -m venv .venv && .venv/bin/pip install -r requirements.txt
+> ```
 
 ---
 
@@ -310,9 +341,32 @@ curl -X DELETE http://localhost:9200/lol_pro_matches
 
 ## Integration with ProStaff API
 
+The Rails API (`prostaff-api`) talks to this scraper in two ways:
+
+**Live match sync** — `ProStaffScraperService` calls the scraper's REST API:
+- `POST /api/v1/sync` — trigger a sync run
+- `GET  /api/v1/enrich/status` — poll enrichment progress
+- Used by `SyncScraperMatchesJob` and `HistoricalBackfillJob`
+
+**Direct ES queries** — `ElasticsearchClient` queries the shared `lol_pro_matches` index directly:
+- `GET /competitive/pro-matches/match-preview` — per-game picks + stats for a recent series
+- `GET /competitive/pro-matches/es-series` — H2H history between two teams
+- The data lake (97K+ games) is populated by all four pipelines above
+
+**Setup:**
 1. Set `SCRAPER_API_URL=https://scraper.prostaff.gg` in the Rails API environment
-2. Implement a client service to call `/api/v1/matches` and import to PostgreSQL
+2. Set `ELASTICSEARCH_URL` to the same ES instance in both repos
 3. See `PROSTAFF_SCRAPER_INTEGRATION_ANALYSIS.md` for the full integration guide
+
+**Running Oracle's Elixir ingest** (requires `.venv` — ES client v8):
+```bash
+cd /path/to/ProStaff-Scraper
+ELASTICSEARCH_URL=https://user:pass@elastic.example.com \
+  .venv/bin/python etl/oracles_elixir_ingest.py --years 2026
+
+# Re-run is safe — duplicate gameids are skipped (op_type=create)
+# To add a new year's CSV: download from oracleselixir.com and re-run with --years <year>
+```
 
 ---
 
